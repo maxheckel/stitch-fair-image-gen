@@ -2,6 +2,9 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
+	"flag"
+	"fmt"
 	"github.com/maxheckel/stitchfair-image-gen/src/util"
 	"image"
 	"image/color"
@@ -9,7 +12,6 @@ import (
 	"math/rand"
 	_ "modernc.org/sqlite"
 	"os"
-	"sort"
 	"time"
 )
 
@@ -17,27 +19,32 @@ type Config struct {
 	ColorCount int
 	Width      int
 	Height     int
+	Source     string
+	DBPath     string
 }
 
-type ColorReplacement struct {
-	OriginalColor util.RGBA
-	NewColor      util.RGBA
+type Pixel struct {
+	X   int    `json:"x"`
+	Y   int    `json:"y"`
+	Hex string `json:"hex"`
+}
+
+type Result struct {
+	Base64PngImage string  `json:"base64PngImage"`
+	Pixels         []Pixel `json:"pixels"`
 }
 
 func main() {
+
+	config := configFromFlags()
+	fmt.Println(config.Width, config.Height)
+
 	// Open the input image
-	inputFile, err := os.Open("./data/sample4.png")
+	inputFile, err := os.Open(config.Source)
 	if err != nil {
 		panic(err)
 	}
 	defer inputFile.Close()
-
-	config := Config{
-		ColorCount: 489,
-		Width:      10,
-		Height:     10,
-	}
-
 	source, _, err := image.Decode(inputFile)
 	if err != nil {
 		panic(err)
@@ -46,13 +53,49 @@ func main() {
 	source = util.ResizeImage(source, config.Width, config.Height)
 	source = util.TrimTransparent(source)
 
-	threads := getThreadsFromDB(err)
+	threads := getThreadsFromDB(&config)
 
 	newImage := ReplaceColors(source, threads, config.ColorCount)
-	err = util.SaveImage(newImage, "./data/output.png", "png")
+	base64Str := util.EncodeImageToBase64(newImage)
+	fmt.Println(base64Str)
+	result := &Result{Base64PngImage: base64Str}
+	for x := 0; x < newImage.Bounds().Dx(); x++ {
+		for y := 0; y < newImage.Bounds().Dy(); y++ {
+
+			r, g, b, a := newImage.At(x, y).RGBA()
+			result.Pixels = append(result.Pixels, Pixel{
+				X: x,
+				Y: y,
+				Hex: util.RGBAtoHex(color.RGBA{
+					R: uint8(r),
+					G: uint8(g),
+					B: uint8(b),
+					A: uint8(a),
+				}),
+			})
+		}
+	}
+	resStr, err := json.Marshal(result)
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println(string(resStr))
+}
+
+func configFromFlags() Config {
+	config := Config{}
+	var width = flag.Int("width", 5, "the width of the image")
+	var height = flag.Int("height", 10, "the height of the image")
+	var count = flag.Int("count", 5, "the color count count of the image")
+	var imageSrc = flag.String("image_path", "./data/sample4.png", "the count of the image")
+	var dbSrc = flag.String("thread_db_path", "./data/database.db", "the count of the image")
+	flag.Parse()
+	config.Width = *width
+	config.Height = *height
+	config.ColorCount = *count
+	config.Source = *imageSrc
+	config.DBPath = *dbSrc
+	return config
 }
 
 // ReplaceColors replaces the colors in the image with the closest matches from the given color palette.
@@ -92,49 +135,6 @@ func ReplaceColors(img image.Image, palette []color.RGBA, targetCount int) image
 	return result
 }
 
-// selectTargetColors selects the most representative colors from the palette based on image usage.
-// Transparent pixels are ignored.
-func selectTargetColor(img image.Image, palette []color.RGBA) color.RGBA {
-	colorUsage := map[color.RGBA]int{}
-	bounds := img.Bounds()
-
-	// Count the occurrence of each color in the image, ignoring transparency
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, a := img.At(x, y).RGBA()
-			if a == 0 { // Ignore transparent pixels
-				continue
-			}
-
-			c := color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), uint8(a >> 8)}
-			colorUsage[c]++
-		}
-	}
-
-	// Rank the palette colors based on their closeness to the image's colors
-	var colorScores []struct {
-		color color.RGBA
-		score int
-	}
-	for _, p := range palette {
-		score := 0
-		for imgColor, _ := range colorUsage {
-			score += int(colorDistance(imgColor, p))
-		}
-		colorScores = append(colorScores, struct {
-			color color.RGBA
-			score int
-		}{p, score})
-	}
-
-	// Sort palette colors by their scores
-	sort.Slice(colorScores, func(i, j int) bool {
-		return colorScores[i].score < colorScores[j].score
-	})
-
-	return colorScores[0].color
-}
-
 // findClosestColor finds the closest color in the palette to the given color.
 func findClosestColor(c color.RGBA, palette []color.RGBA) color.RGBA {
 	minDistance := math.MaxFloat64
@@ -160,8 +160,8 @@ func colorDistance(c1, c2 color.RGBA) float64 {
 	return math.Sqrt(float64(rDiff*rDiff + gDiff*gDiff + bDiff*bDiff + aDiff*aDiff))
 }
 
-func getThreadsFromDB(err error) []color.RGBA {
-	db, err := sql.Open("sqlite", "file:./data/database.db")
+func getThreadsFromDB(config *Config) []color.RGBA {
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s", config.DBPath))
 
 	if err != nil {
 		panic(err)

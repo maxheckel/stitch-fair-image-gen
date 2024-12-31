@@ -1,7 +1,10 @@
 package util
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"golang.org/x/image/draw"
 	"image"
 	"image/color"
@@ -12,8 +15,8 @@ import (
 	"strings"
 )
 
-type RGBA struct {
-	R, G, B, A uint32
+func ImgToBase64(img image.Image) {
+
 }
 
 func GetDarkestPixel(img image.Image) (darkest color.RGBA) {
@@ -82,9 +85,9 @@ func ResizeImage(img image.Image, width, height int) image.Image {
 }
 
 // FindClosestColorInPalette finds the closest color in the palette to a given color.
-func FindClosestColorInPalette(c RGBA, palette []RGBA) RGBA {
+func FindClosestColorInPalette(c color.RGBA, palette []color.RGBA) color.RGBA {
 	minDistance := float64(^uint(0))
-	var closest RGBA
+	var closest color.RGBA
 
 	for _, p := range palette {
 		dist := colorDistance(c, p)
@@ -98,12 +101,31 @@ func FindClosestColorInPalette(c RGBA, palette []RGBA) RGBA {
 }
 
 // colorDistance calculates the squared distance between two colors in RGB space.
-func colorDistance(c1, c2 RGBA) float64 {
+func colorDistance(c1, c2 color.RGBA) float64 {
 	dr := float64(c1.R - c2.R)
 	dg := float64(c1.G - c2.G)
 	db := float64(c1.B - c2.B)
 	da := float64(c1.A - c2.A)
 	return dr*dr + dg*dg + db*db + da*da
+}
+
+// EncodeImageToBase64 takes an image and encodes it to a base64 string
+func EncodeImageToBase64(img image.Image) string {
+	// Create a buffer to store the encoded image
+	buf := new(bytes.Buffer)
+
+	// Encode the image to PNG format
+	err := png.Encode(buf, img) // Use other encoders like jpeg.Encode if needed
+	if err != nil {
+		panic(err)
+	}
+
+	// Encode the buffer to base64
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+func RGBAtoHex(c color.RGBA) string {
+	return fmt.Sprintf("#%02X%02X%02X", c.R, c.G, c.B)
 }
 
 // SaveImage saves an image to a file in the specified format.
